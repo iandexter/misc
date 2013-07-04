@@ -1,0 +1,311 @@
+#!/usr/bin/perl
+#
+# Remote User Management - Manage user accounts in remote hosts.
+# 
+# Requires a non-root user with sudo (NOPASSWD) privileges on passwd, userdel, faillog.
+
+use strict;
+use warnings;
+
+use Net::OpenSSH;
+use Getopt::Long;
+use Pod::Usage;
+use Switch;
+use Data::Dumper;
+
+### Global variables
+my $ssh;
+my @input = ("\n"); ### Empty STDIN data
+my $priv_user = 'nonroot';
+
+### Options
+my $man = 0;
+my $help = 0;
+my $verbose = 0;
+my $operation;
+my @target_hosts;
+my @target_users;
+
+### Helper functions
+sub get_credentials {
+    my ($user) = @_;
+
+    system('/bin/stty -echo');
+    printf "Password for %s: ", $user;
+    my $passwd = <STDIN>;
+    chomp $passwd;
+    system('/bin/stty echo');
+    print "\n";
+
+    return $passwd;
+}
+
+sub connect_ssh {
+    my ($rhost) = @_;
+
+    $ssh = Net::OpenSSH->new($rhost);
+    $ssh->error && die "Unable to connect to $rhost: " . $ssh->error . "\n";
+
+    return $ssh->get_ctl_path;
+}
+
+sub remote_command {
+    my ($rcmd, @input) = @_;
+
+    my $stderr_to_stdout = 1 if $verbose;
+    my $output = $ssh->capture({stdin_data => \@input, stderr_to_stdout => $stderr_to_stdout}, $rcmd);
+
+    ### $output .= "\n" if ($output eq '');
+    return $output;
+}
+
+### Subroutines
+sub sudo_passwd {
+    my ($ruser, $param, @input) = @_;
+
+    my $rcmd = "sudo /usr/bin/passwd $param $ruser";
+    my $output = remote_command($rcmd, @input);
+    print $output;
+}
+
+sub sudo_faillog {
+    my ($ruser) = @_;
+
+    my $rcmd = "sudo /usr/bin/faillog -r $ruser";
+    my $output = remote_command($rcmd, @input);
+    print $output;
+    sudo_passwd($ruser,'-S',@input);
+}
+
+sub sudo_passwd_reset {
+    my ($ruser, $rpass) = @_;
+
+    my @input = ("$rpass");
+    sudo_passwd($ruser,'--stdin',@input);
+
+    @input = ("\n");
+    sudo_passwd($ruser,'-e',@input);
+    sudo_faillog($ruser);
+    ### my $rcmd = "sudo /usr/bin/faillog -r $ruser";
+    ### my $output = remote_command($rcmd, @input);
+    ### print $output;
+}
+
+sub userdel {
+    my ($ruser) = @_;
+
+    my $rcmd = "userdel $ruser";
+    my $output = remote_command($rcmd, @input);
+    print $output;
+}
+
+### Main
+
+### Process command-line args
+pod2usage(-exitstatus => 2, -verbose => 0, -msg => "Must be ran as $priv_user.") if ($ENV{'USER'} ne "$priv_user");
+pod2usage(-exitstatus => 2, -verbose => 0, -msg => 'Use -h or -? for more options.') if (@ARGV == 0);
+GetOptions("help|?" => \$help, "man" => \$man,
+           "verbose+" => \$verbose,
+           "operation=s" => \$operation, 
+           "targets=s" => \@target_hosts, 
+           "users=s" => \@target_users) || pod2usage(0);
+pod2usage(1) if $help;
+pod2usage(-exitstatus => 0, -verbose => 2) if $man;
+$Net::OpenSSH::debug |= 16 if ($verbose > 1);
+
+@target_hosts = split(/,/, join(',', @target_hosts));
+@target_users = split(/,/, join(',', @target_users));
+
+### Perform operation
+if ($operation) {
+    my @op_params = split(/_/, $operation);
+    switch ($op_params[0]) {
+        case /passwd/ {
+            my $param = ($#op_params) ? '-' . $op_params[1] : '--stdin';
+            switch ($param) {
+                case /r/ {
+                    foreach my $tuser (@target_users) {
+                        my $tpass = get_credentials($tuser);
+                        foreach my $thost (@target_hosts) {
+                            my $ssh_connect = connect_ssh($thost);
+                            printf "Command on %s: passwd %s\n", $thost, $tuser if $verbose;
+                            printf "%-16s : ",$thost if (scalar(@target_hosts) > 1);
+                            sudo_passwd_reset($tuser, $tpass);
+                        }
+                        print "---\n" if (scalar(@target_hosts) > 1 && scalar(@target_users) > 1);
+                    }
+                }
+                case /stdin/ {
+                    foreach my $tuser (@target_users) {
+                        my $tpass = get_credentials($tuser);
+                        foreach my $thost (@target_hosts) {
+                            my $ssh_connect = connect_ssh($thost);
+                            printf "Command on %s: passwd %s\n", $thost, $tuser if $verbose;
+                            printf "%-16s : ",$thost if (scalar(@target_hosts) > 1);
+                            sudo_passwd($tuser, $param, $tpass);
+                        }
+                        print "---\n" if (scalar(@target_hosts) > 1 && scalar(@target_users) > 1);
+                    }
+                }
+                else {
+                    foreach my $thost (@target_hosts) {
+                        my $ssh_connect = connect_ssh($thost);
+                        foreach my $tuser (@target_users) {
+                            printf "Command on %s: %s %s %s\n", $thost, $op_params[0], $param, $tuser if $verbose;
+                            printf "%-16s : ",$thost if (scalar(@target_hosts) > 1);
+                            sudo_passwd($tuser, $param, @input);
+                        }
+                        print "---\n" if (scalar(@target_hosts) > 1 && scalar(@target_users) > 1);
+                    }
+                }
+            }
+        }
+        case /faillog/ {
+            foreach my $thost (@target_hosts) {
+                my $ssh_connect = connect_ssh($thost);
+                foreach my $tuser (@target_users) {
+                    printf "Command on %s: %s -r %s\n", $thost, $op_params[0], $tuser if $verbose;
+                    printf "%-16s : ",$thost if (scalar(@target_hosts) > 1);
+                    sudo_faillog($tuser);
+                }
+                print "---\n" if (scalar(@target_hosts) > 1 && scalar(@target_users) > 1);
+            }
+        }
+        case /userdel/ {
+            foreach my $thost (@target_hosts) {
+                my $ssh_connect = connect_ssh($thost);
+                foreach my $tuser (@target_users) {
+                    printf "Command on %s: %s -r %s\n", $thost, $op_params[0], $tuser if $verbose;
+                    printf "%-16s : ",$thost if (scalar(@target_hosts) > 1);
+                    userdel($tuser);
+                }
+                print "---\n" if (scalar(@target_hosts) > 1 && scalar(@target_users) > 1);
+            }
+        }
+        else { pod2usage(-exitstatus => 2, -verbose => 0, -msg => 'Specify the operation.'); }
+    }
+} else { pod2usage(-exitstatus => 2, -verbose => 0, -msg => 'Specify the operation.'); }
+
+print "Processed:" if ((scalar(@target_hosts) > 1) || (scalar(@target_users) > 1));
+printf "%4d hosts", scalar(@target_hosts) if (scalar(@target_hosts) > 1);
+printf "%4d users", scalar(@target_users) if (scalar(@target_users) > 1);
+print "\n";
+
+__END__
+
+=head1 NAME
+
+rum (Remote User Management) - Manage user accounts in remote hosts.
+
+=head1 SYNOPSIS
+
+rum [-o operation] [-t host,host,...] [-u user,user,...]
+
+=over 8
+
+=item B<Example:>
+
+rum -o passwd_S -t host00,host01 -u user00,user01
+
+=back
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<-o operation>
+
+Perform the indicated operation (reset, lock, unlock passwords)
+
+=item B<-t host>
+
+...on the specific host(s) (comma-separated)
+
+=item B<-u user>
+
+...for the specific user(s) (comma-separated)
+
+=item B<-verbose>
+
+Increase verbosity of output (-v -v provides debug information). B<WARNING>: Debug info will display STDIN input (passwords, for example).
+
+=item B<-help|?>
+
+Display this help message.
+
+=item B<-man>
+
+Provide full documentation.
+
+=back
+
+=head1 DESCRIPTION
+
+L<rum> exposes native Linux user management commands that can be used on remote
+hosts. It uses a non-root user with sudo (NOPASSWD) privileges, C<nonroot>, to 
+perform the specified tasks on the target hosts. L<rum> uses SSH to connect to the 
+target hosts through public key authentication.
+
+Note that while it is possible to use L<rum> on the localhost, using built-in
+Linux commands is strongly recommended.
+
+=head2 AVAILABLE OPERATIONS
+
+=head3 PASSWORD MANAGEMENT
+
+The following account maintenance options of L<passwd(1)> are available in L<rum>:
+
+=over 8
+
+=item B<passwd>
+
+Change the user's password. The new password is entered interactively. See
+C<passwd_r> below for password reset.
+
+=item B<passwd_l>
+
+Lock the user's account.
+
+=item B<passwd_u>
+
+Unlock the user's account.
+
+=item B<passwd_S>
+
+Report the password status of the user's account.
+
+=item B<passwd_e>
+
+Force the user to change password at the next login.
+
+=item B<passwd_r>
+
+Reset the user's password. (This is B<not> a native L<passwd(1)> option, but
+instead wraps several maintenance commands to perform the operation.)
+
+Note that the new password should be entered interactively.  For security
+purposes, we don't want to enter the password in the command line. (It B<is>,
+however, stored in a variable in L<rum>, but that's another matter.)
+
+This will also reset the L<faillog(5)> count for the user to C<0>, and prompt the
+user for a new password upon the next login.
+
+=item B<faillog>
+
+Reset the counter for login failures of a user's account. Equivalent to L<faillog> C<-r>.
+
+=item B<userdel>
+
+Delete the user's account, but retains the home directory.
+
+=back
+
+=head1 SEE ALSO
+
+L<Net::OpenSSH>, L<passwd(1)>, L<faillog(8)>, L<userdel(8)>
+
+=head1 COPYRIGHT
+
+Ian Dexter D. Marquez (C<iandexter+tech@gmail.com>)
+
+=cut
