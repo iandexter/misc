@@ -1,0 +1,118 @@
+#!/bin/sh
+#
+# Checks expiration of access to privileged group.
+#
+# HOW TO USE:
+# ===========
+#
+# 1. Get the current information about the user to be added to the privileged group and 
+#    take note of the comment (OLD_COMMENT).
+#
+#       getent passwd username && finger username
+#
+# 2. Set the expiration date:
+#
+#       sudo /usr/sbin/usermod -c "OLD_COMMENT - `date -d 'EXPIRATION_DATE' +%s`" username
+#
+#    where EXPIRATION_DATE is in the following format
+#
+#       DDD MMM dd HH:mm:ss PHT YYYY
+#       Tue Sep 22 00:00:00 PHT 2010
+#       x months(|weeks|days) -- see date(1) for more details
+#
+# 3. Verify using (1).
+# 4. Add user to the privileged group using `usermod`.
+# 5. When a CRITICAL alert is received:
+#
+#    a. Immediately remove from the privileged group.
+#    b. Reset the comment to OLD_COMMENT.
+#
+
+ARGV=$1
+
+EXIT_OK=0
+EXIT_ERR=1
+EXIT_NAGIOS=2
+
+wheel_group=wheel
+sysadmin_group=sysadmin
+not_sysad=
+
+displayAlert() {
+        echo "${1}"
+        exit $2
+}
+
+if [[ "${ARGV}" == "--help" || "${ARGV}" == "-h" ]] ; then
+        cat << "EOL"
+HOW TO USE:
+
+1. Get the current information about the user to be added to the privileged group and 
+   take note of the comment (OLD_COMMENT).
+
+      getent passwd username && finger username
+
+2. Set the expiration date:
+
+      sudo /usr/sbin/usermod -c "OLD_COMMENT - `date -d 'EXPIRATION_DATE' +%s`" username
+
+   where EXPIRATION_DATE is in the following format
+
+      DDD MMM dd HH:mm:ss PHT YYYY
+      Tue Sep 22 00:00:00 PHT 2010
+      x months(|weeks|days) -- see date(1) for more details
+
+3. Verify using (1).
+4. Add user to the privileged group using `usermod`.
+5. When a CRITICAL alert is received:
+
+   a. Immediately remove from the privileged group.
+   b. Reset the comment to OLD_COMMENT.
+EOL
+        exit $EXIT_ERR
+fi
+
+# Compare group members
+if [[ $(uname) = 'AIX' ]] ; then
+    for u in `grep $wheel_group /etc/group | cut -d\: -f4 | sed 's/\,/\ /g'`; do
+        id -nG $u | grep -Eq "$sysadmin_group" >/dev/null 2>&1
+        [[ $? -eq 1 ]] && not_sysad=$not_sysad" $u" || :
+    done
+else
+    for u in $(getent group $wheel_group | awk -F\: '{print $NF}' | sed 's/\,/\ /g'); do
+        id -nG $u | grep -Eq "$sysadmin_group" >/dev/null 2>&1
+        [[ $? -eq 1 ]] && not_sysad=$not_sysad" $u" || :
+    done
+fi
+
+# Check if past deadline
+if [[ $(uname) = 'AIX' ]] ; then
+    # No GNU date(1) in AIX
+    today=$(perl -e 'print time();')
+else
+    today=$(date +%s)
+fi
+no_privs=
+no_expire=
+for u in  $(echo $not_sysad); do
+    expiration=$(awk -v uid="$u" 'BEGIN {FS=":"}; { if($1==uid) print $0}' /etc/passwd \
+        | cut -d\: -f5 | awk '{print $NF}')
+    expr $expiration + 0 >/dev/null 2>&1
+    if [[ $? -eq 0 ]] ; then
+        [[ $expiration -lt $today ]] && no_privs=$no_privs" $u" || :
+    else
+        no_expire=$no_expire" $u" || :
+    fi
+done
+
+no_privs="$(echo ${no_privs} | sed 's/^[ \t]*//')"
+no_expire="$(echo ${no_expire} | sed 's/^[ \t]*//')"
+
+if [[ -n "${no_privs}" || -n "${no_expire}" ]] ; then
+    message="For Action: "
+    [[ -n "${no_privs}" ]] && message=$message"Expired access: ${no_privs}. "
+    [[ -n "${no_expire}" ]] && message=$message"No expiration date: ${no_expire}. "
+    displayAlert "${message}" $EXIT_NAGIOS
+else
+    displayAlert "ALERT OK: Access is still valid." $EXIT_OK
+fi
