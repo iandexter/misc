@@ -1,0 +1,141 @@
+#!/usr/bin/perl
+# Nagios plugin to compare messages flowing between ERP and broker.
+
+use strict;
+use warnings;
+
+use Time::Local;
+use POSIX qw(strftime);
+use Getopt::Std;
+
+my $opt_str = "hvt:";
+my %opts;
+
+my $log_directory = "/path/to/broker/logs/";
+
+my $patt_timestamp = qr/\[DATE.*\[([^]]+)\s\]/x;
+my $patt_msgid = qr/:20:([^\|]+)\|?/x;
+my $timestamp;
+my $msgid;
+
+sub printusage {
+    print <<EOF;
+
+Compare messages flowing between ERP and broker.
+
+Usage: $0 [-hvt] [threshold]
+
+  -h : Print this help message.
+  -v : Verbose output.
+  -t : Threshold value (in minutes).
+
+EOF
+    exit 3;
+}
+
+sub getoptions {
+    getopts($opt_str, \%opts) or printusage();
+    printusage() unless scalar %opts;
+    printusage() if $opts{h};
+    printusage() if (! $opts{t});
+}
+
+sub searchlog {
+    my $pattern = shift;
+    my $logfile = shift;
+
+    my $string = quotemeta $pattern;
+    my $slurp;
+
+    local $/ = undef;
+    my $fh;
+    open($fh, "<$logfile") || die "Cannot open $logfile: $!\n";
+    $slurp = <$fh>;
+    close($fh);
+
+    return ($slurp =~ /$string/) ? 0 : 1;
+}
+
+sub getlatest {
+    my $dir = shift;
+    my $pattern = shift;
+
+    $dir =~ s|/\z||;
+
+    my $today = timelocal(0, 0, 12, (localtime)[3..5]);
+    my $today_stamp = strftime("%d%m%Y", localtime($today));
+
+    my $filename = $dir . "/" . $pattern . "_messages_" . $today_stamp . ".log";
+    return $filename;
+}
+
+sub toepoch {
+    my $timestamp = shift;
+
+    my ($mon, $mday, $year, $hour, $min, $sec, $ampm) =
+       split(/[\/\s:]/, $timestamp);
+    $hour = ($ampm =~ /PM/ && $hour < 12) ? $hour+12 : $hour;
+    return timelocal($sec,$min,$hour,$mday,$mon-1,$year);
+}
+
+### main()
+
+getoptions();
+
+my $threshold = int($opts{t});
+$threshold *= 60;
+printf "Threshold: %d\n", $threshold if ($opts{v});
+my $now = time;
+
+my @all_messages;
+my @above_threshold;
+
+my $from_oracle = getlatest($log_directory, "from_oracle");
+my $to_oracle = getlatest($log_directory, "to_oracle");
+printf "From: %s\nTo: %s\n", $from_oracle, $to_oracle if ($opts{v});
+
+if ( ! -e $from_oracle ) {
+    printf "OK: No messages from Oracle yet.\n";
+    printf "Log file: %s\n", $from_oracle if ($opts{v});
+    exit 0;
+}
+
+my $fh;
+open($fh, "<$from_oracle") or die "Cannot open $from_oracle: $!\n";
+while (<$fh>) {
+    if (/$patt_timestamp/) {
+        $timestamp = $1;
+        while (<$fh>) {
+            last if /^$/;
+            if (/$patt_msgid/) {
+                $msgid = $1;
+                if ( ! grep(/$msgid/i, @all_messages) ){
+                    push(@all_messages, sprintf("%-15s %s", $msgid,
+                        $timestamp));
+                    my $timediff = $now - toepoch($timestamp);
+                    if ( searchlog($msgid, $to_oracle) &&
+                        $timediff > $threshold ) {
+                        push(@above_threshold, sprintf("%-15s %s", $msgid,
+                            $timestamp));
+                    }
+                }
+            }
+        }
+    }
+}
+close($fh);
+
+if (@above_threshold) {
+    my $num_msgs = (scalar @above_threshold > 1) ? "messages" : "message";
+    printf "CRITICAL: %d %s above threshold.\n", scalar @above_threshold,
+        $num_msgs;
+    printf "Messages above threshold:\n" if ($opts{v});
+    if ($opts{v}) { printf "%s\n", $_ foreach (@above_threshold) }
+    exit 2;
+} else {
+    my $num_msgs = (scalar @all_messages > 1) ? "messages" : "message";
+    printf "OK: %d %s below threshold.\n", scalar @all_messages, $num_msgs;
+    printf "All messages:\n" if ($opts{v});
+    if ($opts{v}) { printf "%s\n", $_ foreach (@all_messages) }
+    exit 0;
+}
