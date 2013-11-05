@@ -1,5 +1,20 @@
 #!/usr/bin/perl
+#
 # Nagios plugin to compare messages flowing between ERP and broker.
+#
+# To troubleshoot flow of messages:
+#
+#   $ check_erp_msgs -t [threshold] -v
+#   $ f=/path/to/from_oracle.log/above
+#   $ t=/path/to/to_oracle.log/above
+#   $ M=[month]; D=[day, zero-padded]
+#   $ for m in $(check_erp_msgs -t threshold -s ${D}${M}2013 \
+#       -v | awk -v patt="${M}/${D}" \
+#       '{ if ($2 ~ patt) print $1 }') ; do g=$(grep -B2 $m $f \
+#       $t | awk -F\= '/DATE/ {print $NF}' | \
+#       sed 's/^\s\+\[\(.\+\)\s\+\]/\1/g' | sort | uniq); \
+#       printf "%-16s" $m; echo $g; done | sed 's,09/20/13,,g'
+#
 
 use strict;
 use warnings;
@@ -8,7 +23,7 @@ use Time::Local;
 use POSIX qw(strftime);
 use Getopt::Std;
 
-my $opt_str = "hvt:";
+my $opt_str = "hvt:s:";
 my %opts;
 
 my $log_directory = "/path/to/broker/logs/";
@@ -28,6 +43,7 @@ Usage: $0 [-hvt] [threshold]
   -h : Print this help message.
   -v : Verbose output.
   -t : Threshold value (in minutes).
+  -s : Specify date (in ddmmYY). (optional)
 
 EOF
     exit 3;
@@ -49,7 +65,7 @@ sub searchlog {
 
     local $/ = undef;
     my $fh;
-    open($fh, "<$logfile") || die "Cannot open $logfile: $!\n";
+    open($fh, "<$logfile") or die "Cannot open $logfile: $!\n";
     $slurp = <$fh>;
     close($fh);
 
@@ -69,6 +85,17 @@ sub getlatest {
     return $filename;
 }
 
+sub getdated {
+    my $dir = shift;
+    my $pattern = shift;
+    my $timestamp = shift;
+
+    $dir =~ s|/\z||;
+
+    my $filename = $dir . "/" . $pattern . "_messages_" . $timestamp . ".log";
+    return $filename;
+}
+
 sub toepoch {
     my $timestamp = shift;
 
@@ -85,13 +112,15 @@ getoptions();
 my $threshold = int($opts{t});
 $threshold *= 60;
 printf "Threshold: %d\n", $threshold if ($opts{v});
-my $now = time;
+my $now = time();
 
 my @all_messages;
 my @above_threshold;
 
 my $from_oracle = getlatest($log_directory, "from_oracle");
 my $to_oracle = getlatest($log_directory, "to_oracle");
+$from_oracle = getdated($log_directory, "from_oracle", $opts{s}) if ($opts{s});
+$to_oracle = getdated($log_directory, "to_oracle", $opts{s}) if ($opts{s});
 printf "From: %s\nTo: %s\n", $from_oracle, $to_oracle if ($opts{v});
 
 if ( ! -e $from_oracle ) {

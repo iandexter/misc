@@ -1,0 +1,111 @@
+#!/usr/bin/perl
+#
+# Nagios plugin to check flow of messages to and from the Mainframe.
+
+use strict;
+use warnings;
+
+use Data::Dumper;
+use Getopt::Std;
+
+$| = 1;
+
+my $opt_str = "hvt:";
+my %opts;
+
+my $maildir = "/var/lib/nagios/Maildir/Mainframe/";
+my $patt_subject = qr/Subject:\s+MESSAGE\ FILE\ NOTICE/x;
+my $patt_message_id = qr/\s+(\d{2}[A-Z]{1}\d{5}.+)/x;
+
+sub printusage {
+    print <<EOF;
+
+Check messages flowing to and from the Mainframe.
+
+Usage: $0 [-hvt] [threshold]
+
+  -h : Print this help message.
+  -v : Verbose output.
+  -t : Threshold value (in minutes).
+
+EOF
+    exit 3;
+}
+
+sub getoptions {
+    getopts($opt_str, \%opts) or printusage();
+    printusage() unless scalar %opts;
+    printusage() if $opts{h};
+    printusage() if (! $opts{t});
+}
+
+sub gettoday {
+    my $path = shift;
+    $path =~ s|/\z||;
+
+    opendir(my $dir, $path) or die "Cannot open $path: $!\n";
+    my @files = grep { ! /^\.\.?$/ && -f "$path/$_" } readdir($dir);
+    closedir($dir);
+
+    my @sorted;
+    foreach (@files) { push(@sorted, "$path/$_") if ( -M "$path/$_" <= 1 ); }
+
+    return @sorted;
+}
+
+### main()
+
+getoptions();
+
+my $threshold = int($opts{t});
+$threshold *= 60;
+
+my @skipped;
+my @msg_ids;
+my %msg_hash;
+my @no_pairs;
+
+foreach (gettoday($maildir)) {
+    my $mtime = (stat($_))[9];
+    my $stime = time();
+    if ( ($stime - $mtime) < $threshold ) {
+        push(@skipped, $_);
+        next;
+    }
+    open(my $fh, "<$_") or die "Cannot open $_: $!\n";
+    while (<$fh>) {
+        if (/$patt_subject/) {
+            while (<$fh>) {
+                push(@msg_ids, $1) if (/$patt_message_id/);
+            }
+        }
+    }
+    close($fh);
+}
+
+$msg_hash{$_}++ foreach @msg_ids;
+
+foreach (keys %msg_hash) {
+    push(@no_pairs, $_) if ($msg_hash{$_} eq '1');
+}
+
+printf "Threshold: %d\n", $threshold if ($opts{v});
+printf "Maildir: %s\n", $maildir if ($opts{v});
+printf "\nSkipped (less than threshold):\n" if ($opts{v});
+
+if ($opts{v}) {printf "%s\n", $_ foreach (@skipped) }
+printf "\n[OUTPUT] " if ($opts{v});
+
+if (@no_pairs) {
+    my $num_msgs = (scalar @no_pairs > 1) ? "messages" : "message";
+    printf "CRITICAL: %d %s above threshold.\n", scalar @no_pairs, $num_msgs;
+    printf "\nMessages above threshold:\n" if ($opts{v});
+    if ($opts{v}) { printf "%s\n", $_ foreach (@no_pairs) }
+    exit 2;
+} else {
+    my $num_msgs = (scalar keys %msg_hash > 1) ? "messages" : "message";
+    printf "OK: %d %s below threshold.\n", scalar keys %msg_hash, $num_msgs;
+    printf "\nAll messages:\n" if ($opts{v});
+    if ($opts{v}) { printf "%s\n", $_ foreach (keys %msg_hash) }
+    exit 0;
+}
