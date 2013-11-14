@@ -2,21 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-Filename:         generate_gen.py
-Author:           im4
-HeadURL:          $HeadURL: https://svn.asiandevbank.org/ccau-unix/sysadmin/im4/bin/python.inc $
-Last revised by:  $Author: im4 $
-Last commit:      $Revision: 4481 $
-Last commit date: $Date: 2013-02-28 15:08:58 +0800 (Thu, 28 Feb 2013) $
-Description:      Generate ``tough nut'' passwords and passphrases by padding
-                  and using permutations of common words, then calculate the
-                  bit entropy for each generated password.
+Generate ``tough nut'' passwords and passphrases by padding and using
+permutations of common words, then calculate the bit entropy for each generated
+password.
 
-                  Usage: python toughnut_gen.py n file1 file2 ... filen
+Usage: python toughnut_gen.py n file1 file2 ... filen
 
-                         n     Number of passwords to generate (default: 10)
-                         file  List of common words to use
-                               (default: internal seed list)
+       n     Number of passwords to generate (default: 10)
+       file  List of common words to use
+             (default: internal seed list)
 """
 
 import random
