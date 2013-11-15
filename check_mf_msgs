@@ -14,6 +14,7 @@ my $opt_str = "hvt:";
 my %opts;
 
 my $maildir = "/var/lib/nagios/Maildir/Mainframe/";
+my $whitelist = "/var/lib/nagios/whitelist.msgs";
 my $patt_subject = qr/Subject:\s+MESSAGE\ FILE\ NOTICE/x;
 my $patt_message_id = qr/\s+(\d{2}[A-Z]{1}\d{5}.+)/x;
 
@@ -53,6 +54,22 @@ sub gettoday {
     return @sorted;
 }
 
+sub searchfile {
+    my $pattern = shift;
+    my $logfile = shift;
+
+    my $string = quotemeta $pattern;
+    my $slurp;
+
+    local $/ = undef;
+    my $fh;
+    open($fh, "<$file") or die "Cannot open $file: $!\n";
+    $slurp = <$fh>;
+    close($fh);
+
+    return ($slurp =~ /$string/) ? 1 : 0;
+}
+
 ### main()
 
 getoptions();
@@ -86,6 +103,12 @@ foreach (gettoday($maildir)) {
 $msg_hash{$_}++ foreach @msg_ids;
 
 foreach (keys %msg_hash) {
+    if ( -e $whitelist ) {
+        if ( searchfile($_, $whitelist) ) {
+            $msg_hash{$_ . " [WHITELISTED]"} = delete $msg_hash{$_};
+            next;
+        }
+    }
     push(@no_pairs, $_) if ($msg_hash{$_} eq '1');
 }
 

@@ -5,8 +5,8 @@
 # To troubleshoot flow of messages:
 #
 #   $ check_erp_msgs -t [threshold] -v
-#   $ f=/path/to/from_oracle.log/above
-#   $ t=/path/to/to_oracle.log/above
+#   $ f=/path/to/from_erp.log/above
+#   $ t=/path/to/to_erp.log/above
 #   $ M=[month]; D=[day, zero-padded]
 #   $ for m in $(check_erp_msgs -t threshold -s ${D}${M}2013 \
 #       -v | awk -v patt="${M}/${D}" \
@@ -27,6 +27,7 @@ my $opt_str = "hvt:s:";
 my %opts;
 
 my $log_directory = "/path/to/broker/logs/";
+my $whitelist = "/var/tmp/whitelist.msgs";
 
 my $patt_timestamp = qr/\[DATE.*\[([^]]+)\s\]/x;
 my $patt_msgid = qr/:20:([^\|]+)\|?/x;
@@ -69,7 +70,7 @@ sub searchlog {
     $slurp = <$fh>;
     close($fh);
 
-    return ($slurp =~ /$string/) ? 0 : 1;
+    return ($slurp =~ /$string/) ? 1 : 0;
 }
 
 sub getlatest {
@@ -117,20 +118,20 @@ my $now = time();
 my @all_messages;
 my @above_threshold;
 
-my $from_oracle = getlatest($log_directory, "from_oracle");
-my $to_oracle = getlatest($log_directory, "to_oracle");
-$from_oracle = getdated($log_directory, "from_oracle", $opts{s}) if ($opts{s});
-$to_oracle = getdated($log_directory, "to_oracle", $opts{s}) if ($opts{s});
-printf "From: %s\nTo: %s\n", $from_oracle, $to_oracle if ($opts{v});
+my $from_erp = getlatest($log_directory, "from_erp");
+my $to_erp = getlatest($log_directory, "to_erp");
+$from_erp = getdated($log_directory, "from_erp", $opts{s}) if ($opts{s});
+$to_erp = getdated($log_directory, "to_erp", $opts{s}) if ($opts{s});
+printf "From: %s\nTo: %s\n", $from_erp, $to_erp if ($opts{v});
 
-if ( ! -e $from_oracle ) {
-    printf "OK: No messages from Oracle yet.\n";
-    printf "Log file: %s\n", $from_oracle if ($opts{v});
+if ( ! -e $from_erp ) {
+    printf "OK: No messages from ERP yet.\n";
+    printf "Log file: %s\n", $from_erp if ($opts{v});
     exit 0;
 }
 
 my $fh;
-open($fh, "<$from_oracle") or die "Cannot open $from_oracle: $!\n";
+open($fh, "<$from_erp") or die "Cannot open $from_erp: $!\n";
 while (<$fh>) {
     if (/$patt_timestamp/) {
         $timestamp = $1;
@@ -142,7 +143,16 @@ while (<$fh>) {
                     push(@all_messages, sprintf("%-15s %s", $msgid,
                         $timestamp));
                     my $timediff = $now - toepoch($timestamp);
-                    if ( searchlog($msgid, $to_oracle) &&
+                    if ( -e $whitelist) {
+                        if ( searchlog($msgid, $whitelist) ) {
+                            if ( searchlog($timestamp, $whitelist) ) {
+                                s/$timestamp/$timestamp [WHITELISTED]/
+                                    for (@all_messages);
+                                next;
+                            }
+                        }
+                    }
+                    if ( ! searchlog($msgid, $to_erp) &&
                         $timediff > $threshold ) {
                         push(@above_threshold, sprintf("%-15s %s", $msgid,
                             $timestamp));
