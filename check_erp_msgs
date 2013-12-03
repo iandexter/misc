@@ -66,7 +66,7 @@ sub searchlog {
 
     local $/ = undef;
     my $fh;
-    open($fh, "<$logfile") or die "Cannot open $logfile: $!\n";
+    open $fh, '<', "$logfile" or die "Cannot open $logfile: $!\n";
     $slurp = <$fh>;
     close($fh);
 
@@ -131,7 +131,7 @@ if ( ! -e $from_erp ) {
 }
 
 my $fh;
-open($fh, "<$from_erp") or die "Cannot open $from_erp: $!\n";
+open $fh, '<', "$from_erp" or die "Cannot open $from_erp: $!\n";
 while (<$fh>) {
     if (/$patt_timestamp/) {
         $timestamp = $1;
