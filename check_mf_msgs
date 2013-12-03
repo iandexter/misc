@@ -19,10 +19,10 @@ my $patt_message_id = qr/\s+(\d{2}[A-Z]{1}\d{5}.+)/x;
 
 my $commandfile = "/usr/local/nagios/var/rw/nagios.cmd";
 my $servicestatus = 0;
-my $servicemessage = "";
+my $servicemessage;
 
 sub printusage {
-    print <<EOF;
+    print <<"EOF";
 
 Check messages flowing to and from the Mainframe.
 
@@ -43,14 +43,15 @@ sub getoptions {
     getopts($opt_str, \%opts) or printusage();
     printusage() unless scalar %opts;
     printusage() if (! $opts{t} || ! $opts{H} || ! $opts{S} || $opts{h});
+    return;
 }
 
 sub gettoday {
     my $path = shift;
-    $path =~ s|/\z||;
+    $path =~ s|/\z||x;
 
     opendir my $dir, $path or die "Cannot open $path: $!\n";
-    my @files = grep { ! /^\.\.?$/ && -f "$path/$_" } readdir($dir);
+    my @files = grep { ! /^\.\.?$/x && -f "$path/$_" } readdir($dir);
     closedir($dir);
 
     my @sorted;
@@ -72,7 +73,7 @@ sub searchfile {
     $slurp = <$fh>;
     close($fh);
 
-    return ($slurp =~ /$string/) ? 1 : 0;
+    return ($slurp =~ /$string/x) ? 1 : 0;
 }
 
 sub writecommand {
@@ -88,6 +89,7 @@ sub writecommand {
     open $fh, '>', "$commandfile" or die "Cannot open $commandfile: $!\n";
     print $fh $extcmd;
     close($fh);
+    return;
 }
 
 ### main()
@@ -121,9 +123,9 @@ foreach (gettoday($maildir)) {
     }
     open my $fh, '<',  "$fn" or die "Cannot open $fn: $!\n";
     while (<$fh>) {
-        if (/$patt_subject/) {
+        if (/$patt_subject/x) {
             while (<$fh>) {
-                push(@msg_ids, $1) if (/$patt_message_id/);
+                push(@msg_ids, $1) if (/$patt_message_id/x);
             }
         }
     }
@@ -173,6 +175,7 @@ if ($opts{o}) {
     print $servicemessage . "\n";
 } else {
     writecommand($commandhost, $commandsvc, $servicestatus, $servicemessage);
+    printf "Wrote to command file: %s\n", $servicemessage if ($opts{v});
 }
 
 exit $servicestatus;
