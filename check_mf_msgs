@@ -9,15 +9,17 @@ use Getopt::Std;
 
 $| = 1;
 
-my $opt_str = "dhvot:H:S:";
+our $VERSION = 1.1;
+
+my $opt_str = 'dhvot:H:S:';
 my %opts;
 
-my $maildir = "/var/lib/nagios/Maildir/Mainframe/new";
-my $whitelist = "/var/lib/nagios/whitelist.msgs";
-my $patt_subject = qr/Subject:\s+MESSAGE\ FILE\ NOTICE/x;
+my $maildir         = '/var/lib/nagios/Maildir/Mainframe/new';
+my $whitelist       = '/var/lib/nagios/whitelist.msgs';
+my $patt_subject    = qr/Subject:\s+MESSAGE\ FILE\ NOTICE/x;
 my $patt_message_id = qr/\s+(\d{2}[A-Z]{1}\d{5}.+)/x;
 
-my $commandfile = "/usr/local/nagios/var/rw/nagios.cmd";
+my $commandfile   = '/usr/local/nagios/var/rw/nagios.cmd';
 my $servicestatus = 0;
 my $servicemessage;
 
@@ -40,22 +42,22 @@ EOF
 }
 
 sub getoptions {
-    getopts($opt_str, \%opts) or printusage();
+    getopts( $opt_str, \%opts ) or printusage();
     printusage() unless scalar %opts;
-    printusage() if (! $opts{t} || ! $opts{H} || ! $opts{S} || $opts{h});
+    printusage() if ( !$opts{t} || !$opts{H} || !$opts{S} || $opts{h} );
     return;
 }
 
 sub gettoday {
     my $path = shift;
-    $path =~ s|/\z||x;
+    $path =~ s|/\z||mx;
 
     opendir my $dir, $path or die "Cannot open $path: $!\n";
-    my @files = grep { ! /^\.\.?$/x && -f "$path/$_" } readdir($dir);
-    closedir($dir);
+    my @files = grep { !/^\.\.?$/mx && -f "$path/$_" } readdir $dir;
+    closedir $dir or warn "Cannot close $path: $!\n";
 
     my @sorted;
-    foreach (@files) { push(@sorted, "$path/$_") if ( -M "$path/$_" <= 1 ); }
+    foreach (@files) { push @sorted, "$path/$_" if ( -M "$path/$_" <= 1 ); }
 
     return @sorted;
 }
@@ -71,24 +73,24 @@ sub searchfile {
     my $fh;
     open $fh, '<', "$logfile" or die "Cannot open $logfile: $!\n";
     $slurp = <$fh>;
-    close($fh);
+    close $fh or warn "Cannot close $logfile: $!\n";
 
-    return ($slurp =~ /$string/x) ? 1 : 0;
+    return ( $slurp =~ /$string/mx ) ? 1 : 0;
 }
 
 sub writecommand {
     my $commandhost = shift;
-    my $commandsvc = shift;
-    my $status = shift;
-    my $message = shift;
+    my $commandsvc  = shift;
+    my $status      = shift;
+    my $message     = shift;
 
-    my $extcmd = sprintf("[%d] PROCESS_SERVICE_CHECK_RESULT;%s;%s;%d;%s\n",
-        time(), $commandhost, $commandsvc, $status, $message);
+    my $extcmd = sprintf "[%d] PROCESS_SERVICE_CHECK_RESULT;%s;%s;%d;%s\n",
+      time(), $commandhost, $commandsvc, $status, $message;
 
     my $fh;
     open $fh, '>', "$commandfile" or die "Cannot open $commandfile: $!\n";
-    print $fh $extcmd;
-    close($fh);
+    print {$fh} $extcmd;
+    close $fh or warn "Cannot close $commandfile: $!\n";
     return;
 }
 
@@ -96,57 +98,59 @@ sub writecommand {
 
 getoptions();
 
-my $threshold = int($opts{t});
+my $threshold = int $opts{t};
 $threshold *= 60;
 
-if ($opts{d}) {
-    $maildir = "var/lib/nagios/Maildir/Mainframe/new/";
-    $whitelist = "var/lib/nagios/whitelist.msgs";
-    $commandfile = "usr/local/nagios/var/rw/nagios.cmd";
+if ( $opts{d} ) {
+    $maildir     = 'var/lib/nagios/Maildir/Mainframe/new/';
+    $whitelist   = 'var/lib/nagios/whitelist.msgs';
+    $commandfile = 'usr/local/nagios/var/rw/nagios.cmd';
 }
 
 my $commandhost = $opts{H};
-my $commandsvc = $opts{S};
+my $commandsvc  = $opts{S};
 
 my @skipped;
 my @msg_ids;
 my %msg_hash;
 my @no_pairs;
 
-foreach (gettoday($maildir)) {
-    my $mtime = (stat($_))[9];
-    my $stime = time();
-    my $fn = $_;
-    if ( ($stime - $mtime) < $threshold ) {
-        push(@skipped, $fn);
+foreach ( gettoday($maildir) ) {
+    my $fn    = $_;
+    my $mtime = ( stat $fn )[9];
+    my $stime = time;
+    if ( ( $stime - $mtime ) < $threshold ) {
+        push @skipped, $fn;
         next;
     }
-    open my $fh, '<',  "$fn" or die "Cannot open $fn: $!\n";
+    open my $fh, '<', "$fn" or die "Cannot open $fn: $!\n";
     while (<$fh>) {
-        if (/$patt_subject/x) {
+        if (/$patt_subject/mx) {
             while (<$fh>) {
-                push(@msg_ids, $1) if (/$patt_message_id/x);
+                push @msg_ids, $1 if (/$patt_message_id/mx);
             }
         }
     }
-    close($fh);
+    close $fh or warn "Cannot close $fn: $!\n";
 }
 
 $msg_hash{$_}++ foreach @msg_ids;
 
-foreach (keys %msg_hash) {
+foreach ( keys %msg_hash ) {
+    my $msg_key = $_;
     if ( -e $whitelist ) {
-        if ( searchfile($_, $whitelist) ) {
-            $msg_hash{$_ . " [WHITELISTED]"} = delete $msg_hash{$_};
+        if ( searchfile( $msg_key, $whitelist ) ) {
+            $msg_hash{ $msg_key . ' [WHITELISTED]' } =
+              delete $msg_hash{$msg_key};
             next;
         }
     }
-    push(@no_pairs, $_) if ($msg_hash{$_} eq '1');
+    push @no_pairs, $msg_key if ( $msg_hash{$msg_key} eq '1' );
 }
 
-if ($opts{v}) {
+if ( $opts{v} ) {
     printf "Threshold: %d\n", $threshold;
-    printf "Maildir: %s\n", $maildir;
+    printf "Maildir: %s\n",   $maildir;
     if (@skipped) {
         printf "\nSkipped (less than threshold):\n";
         printf "%s\n", $_ foreach (@skipped);
@@ -156,26 +160,28 @@ if ($opts{v}) {
         printf "%s\n", $_ foreach (@no_pairs);
     }
     printf "\nAll messages:\n";
-    printf "%s\n", $_ foreach (keys %msg_hash);
+    printf "%s\n", $_ foreach ( keys %msg_hash );
     print "\n[OUTPUT] ";
 }
 
 if (@no_pairs) {
-    my $num_msgs = (scalar @no_pairs > 1) ? "messages" : "message";
-    $servicemessage = sprintf("CRITICAL: %d %s above threshold.",
-        scalar @no_pairs, $num_msgs);
+    my $num_msgs = ( scalar @no_pairs > 1 ) ? 'messages' : 'message';
+    $servicemessage = sprintf "CRITICAL: %d %s above threshold.",
+      scalar @no_pairs, $num_msgs;
     $servicestatus = 2;
-} else {
-    my $num_msgs = (scalar keys %msg_hash > 1) ? "Messages" : "Message";
-    $servicemessage = sprintf("OK: %s below threshold.", $num_msgs);
+}
+else {
+    my $num_msgs = ( scalar keys %msg_hash > 1 ) ? 'Messages' : 'Message';
+    $servicemessage = sprintf "OK: %s below threshold.", $num_msgs;
     $servicestatus = 0;
 }
 
-if ($opts{o}) {
+if ( $opts{o} ) {
     print $servicemessage . "\n";
-} else {
-    writecommand($commandhost, $commandsvc, $servicestatus, $servicemessage);
-    printf "Wrote to command file: %s\n", $servicemessage if ($opts{v});
+}
+else {
+    writecommand( $commandhost, $commandsvc, $servicestatus, $servicemessage );
+    printf "Wrote to command file: %s\n", $servicemessage if ( $opts{v} );
 }
 
 exit $servicestatus;
