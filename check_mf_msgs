@@ -6,10 +6,11 @@ use strict;
 use warnings;
 
 use Getopt::Std;
+use Time::Local qw( timelocal );
 
 $| = 1;
 
-our $VERSION = 1.1;
+our $VERSION = 1.2;
 
 my $opt_str = 'dhvot:H:S:';
 my %opts;
@@ -43,8 +44,9 @@ EOF
 
 sub getoptions {
     getopts( $opt_str, \%opts ) or printusage();
-    printusage() unless scalar %opts;
-    printusage() if ( !$opts{t} || !$opts{H} || !$opts{S} || $opts{h} );
+    if ( ! scalar %opts || !$opts{t} || !$opts{H} || !$opts{S} || $opts{h} ) {
+        printusage();
+    }
     return;
 }
 
@@ -57,7 +59,12 @@ sub gettoday {
     closedir $dir or warn "Cannot close $path: $!\n";
 
     my @sorted;
-    foreach (@files) { push @sorted, "$path/$_" if ( -M "$path/$_" <= 1 ); }
+    foreach my $fn (@files) {
+        my $mtime = ( stat "$path/$fn" )[9];
+        my $today = timelocal( 0, 0, 0, (localtime)[ 3, 4, 5 ] );
+
+        if ( $mtime >= $today ) { push @sorted, "$path/$fn"; }
+    }
 
     return @sorted;
 }
@@ -115,8 +122,7 @@ my @msg_ids;
 my %msg_hash;
 my @no_pairs;
 
-foreach ( gettoday($maildir) ) {
-    my $fn    = $_;
+foreach my $fn ( gettoday($maildir) ) {
     my $mtime = ( stat $fn )[9];
     my $stime = time;
     if ( ( $stime - $mtime ) < $threshold ) {
@@ -127,7 +133,7 @@ foreach ( gettoday($maildir) ) {
     while (<$fh>) {
         if (/$patt_subject/mx) {
             while (<$fh>) {
-                push @msg_ids, $1 if (/$patt_message_id/mx);
+                if (/$patt_message_id/mx) { push @msg_ids, $1; }
             }
         }
     }
@@ -136,8 +142,7 @@ foreach ( gettoday($maildir) ) {
 
 $msg_hash{$_}++ foreach @msg_ids;
 
-foreach ( keys %msg_hash ) {
-    my $msg_key = $_;
+foreach my $msg_key ( keys %msg_hash ) {
     if ( -e $whitelist ) {
         if ( searchfile( $msg_key, $whitelist ) ) {
             $msg_hash{ $msg_key . ' [WHITELISTED]' } =
@@ -145,7 +150,7 @@ foreach ( keys %msg_hash ) {
             next;
         }
     }
-    push @no_pairs, $msg_key if ( $msg_hash{$msg_key} eq '1' );
+    if ( $msg_hash{$msg_key} eq '1' ) { push @no_pairs, $msg_key; }
 }
 
 if ( $opts{v} ) {
@@ -181,7 +186,7 @@ if ( $opts{o} ) {
 }
 else {
     writecommand( $commandhost, $commandsvc, $servicestatus, $servicemessage );
-    printf "Wrote to command file: %s\n", $servicemessage if ( $opts{v} );
+    if ( $opts{v} ) { printf "Wrote to command file: %s\n", $servicemessage; }
 }
 
 exit $servicestatus;
