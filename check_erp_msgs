@@ -1,5 +1,4 @@
 #!/usr/bin/perl
-#
 # Nagios plugin to compare messages flowing between ERP and broker.
 #
 # To troubleshoot flow of messages:
@@ -22,9 +21,9 @@ use Time::Local;
 use POSIX qw(strftime);
 use Getopt::Std;
 
-our $VERSION = 1.1;
+our $VERSION = 1.2;
 
-my $opt_str = 'dhvt:s:';
+my $opt_str = 'dhvt:s:n';
 my %opts;
 
 my $log_directory = '/path/to/broker/logs/';
@@ -46,6 +45,7 @@ Usage: $0 [-hvt] [threshold]
   -v : Verbose output.
   -t : Threshold value (in minutes).
   -s : Specify date (in ddmmYY). (optional)
+  -n : Get messages within threshold.
 
 EOF
     exit 3;
@@ -96,8 +96,7 @@ sub getdated {
 
     $dir =~ s|/\z||mx;
 
-    my $filename = sprintf "%s/%s_messages_%s.log", $dir, $pattern,
-      $today_stamp;
+    my $filename = sprintf "%s/%s_messages_%s.log", $dir, $pattern, $timestamp;
     return $filename;
 }
 
@@ -108,6 +107,22 @@ sub toepoch {
       split /[\/\s:]/mx, $timestamp;
     $hour = ( $ampm =~ /PM/mx && $hour < 12 ) ? $hour + 12 : $hour;
     return timelocal( $sec, $min, $hour, $mday, $mon - 1, $year );
+}
+
+sub tojson {
+    my @within = shift;
+    my @above  = shift;
+
+    my $patt_msg = '((?:[a-z][a-z]+).[+-]?\\d*\\.\\d+)(?![-+0-9\\.])\\s+.*';
+    s/$patt_msg/\"$1\"/is for @within;
+    s/$patt_msg/\"$1\"/is for @above;
+    print '{"within":[';
+    print join ',', @within;
+    print '],"above":[';
+    print join ',', @above;
+    print "]}\n";
+
+    return;
 }
 
 ### main()
@@ -121,16 +136,19 @@ my $now = time;
 
 my @all_messages;
 my @above_threshold;
+my @within_threshold;
 
 my $from_erp = getlatest( $log_directory, 'from_erp' );
 my $to_erp   = getlatest( $log_directory, 'to_erp' );
-$from_erp    = 'from_erp_messages_12092013.log' if ( $opts{d} );
-$to_erp      = 'to_erp_messages_12092013.log'   if ( $opts{d} );
-$whitelist   = 'whitelist.msgs'                 if ( $opts{d} );
-$from_erp    = getdated( $log_directory, 'from_erp', $opts{s} )
-  if ( $opts{s} );
-$to_erp      = getdated( $log_directory, 'to_erp', $opts{s} )
-  if ( $opts{s} );
+if ( $opts{d} ) {
+    $from_erp  = 'from_erp_messages_12092013.log';
+    $to_erp    = 'to_erp_messages_12092013.log';
+    $whitelist = 'whitelist.msgs';
+}
+if ( $opts{s} ) {
+    $from_erp = getdated( $log_directory, 'from_erp', $opts{s} );
+    $to_erp = getdated( $log_directory, 'to_erp', $opts{s} );
+}
 printf "From: %s\nTo: %s\n", $from_erp, $to_erp if ( $opts{v} );
 
 if ( !-e $from_erp ) {
@@ -161,9 +179,11 @@ while (<$fh>) {
                         }
                     }
                     if ( !searchlog( $msgid, $to_erp )
-                        && $timediff > $threshold )
-                    {
+                        && $timediff > $threshold ) {
                         push @above_threshold, sprintf "%-15s %s", $msgid,
+                          $timestamp;
+                    } elsif ( $timediff <= $threshold ) {
+                        push @within_threshold, sprintf "%-15s %s", $msgid,
                           $timestamp;
                     }
                 }
@@ -172,6 +192,11 @@ while (<$fh>) {
     }
 }
 close $fh or warn "Cannot close $from_erp: $!\n";
+
+if ( $opts{n} ) {
+    tojson( @within_threshold, @above_threshold );
+    exit 0;
+}
 
 if (@above_threshold) {
     my $num_msgs = ( scalar @above_threshold > 1 ) ? 'messages' : 'message';
