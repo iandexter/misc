@@ -21,7 +21,7 @@ use Time::Local;
 use POSIX qw(strftime);
 use Getopt::Std;
 
-our $VERSION = 1.2;
+our $VERSION = 1.3;
 
 my $opt_str = 'dhvt:s:n';
 my %opts;
@@ -109,22 +109,6 @@ sub toepoch {
     return timelocal( $sec, $min, $hour, $mday, $mon - 1, $year );
 }
 
-sub tojson {
-    my @within = shift;
-    my @above  = shift;
-
-    my $patt_msg = '((?:[a-z][a-z]+).[+-]?\\d*\\.\\d+)(?![-+0-9\\.])\\s+.*';
-    s/$patt_msg/\"$1\"/is for @within;
-    s/$patt_msg/\"$1\"/is for @above;
-    print '{"within":[';
-    print join ',', @within;
-    print '],"above":[';
-    print join ',', @above;
-    print "]}\n";
-
-    return;
-}
-
 ### main()
 
 getoptions();
@@ -140,6 +124,7 @@ my @within_threshold;
 
 my $from_erp = getlatest( $log_directory, 'from_erp' );
 my $to_erp   = getlatest( $log_directory, 'to_erp' );
+
 if ( $opts{d} ) {
     $from_erp  = 'from_erp_messages_12092013.log';
     $to_erp    = 'to_erp_messages_12092013.log';
@@ -147,11 +132,16 @@ if ( $opts{d} ) {
 }
 if ( $opts{s} ) {
     $from_erp = getdated( $log_directory, 'from_erp', $opts{s} );
-    $to_erp = getdated( $log_directory, 'to_erp', $opts{s} );
+    $to_erp   = getdated( $log_directory, 'to_erp', $opts{s} );
 }
+
 printf "From: %s\nTo: %s\n", $from_erp, $to_erp if ( $opts{v} );
 
 if ( !-e $from_erp ) {
+    if ( $opts{n} ) {
+        printf "within;\nabove;\n";
+        exit 0;
+    }
     printf "OK: No messages from ERP yet.\n";
     printf "Log file: %s\n", $from_erp if ( $opts{v} );
     exit 0;
@@ -194,7 +184,8 @@ while (<$fh>) {
 close $fh or warn "Cannot close $from_erp: $!\n";
 
 if ( $opts{n} ) {
-    tojson( @within_threshold, @above_threshold );
+    printf "within;%s\n", join ',', @within_threshold if (@within_threshold);
+    printf "above;%s\n", join ',', @above_threshold if (@above_threshold);
     exit 0;
 }
 
