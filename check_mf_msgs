@@ -44,7 +44,7 @@ EOF
 
 sub getoptions {
     getopts( $opt_str, \%opts ) or printusage();
-    if ( ! scalar %opts || !$opts{t} || !$opts{H} || !$opts{S} || $opts{h} ) {
+    if ( !scalar %opts || !$opts{t} || !$opts{H} || !$opts{S} || $opts{h} ) {
         printusage();
     }
     return;
@@ -117,12 +117,16 @@ if ( $opts{d} ) {
 my $commandhost = $opts{H};
 my $commandsvc  = $opts{S};
 
+my @files = gettoday($maildir);
 my @skipped;
 my @msg_ids;
 my %msg_hash;
 my @no_pairs;
+my @with_pairs_arr;
+my %with_pairs_hash;
 
-foreach my $fn ( gettoday($maildir) ) {
+### Parse mail
+foreach my $fn (@files) {
     my $mtime = ( stat $fn )[9];
     my $stime = time;
     if ( ( $stime - $mtime ) < $threshold ) {
@@ -142,6 +146,7 @@ foreach my $fn ( gettoday($maildir) ) {
 
 $msg_hash{$_}++ foreach @msg_ids;
 
+### Filter message IDs -- first pass
 foreach my $msg_key ( keys %msg_hash ) {
     if ( -e $whitelist ) {
         if ( searchfile( $msg_key, $whitelist ) ) {
@@ -150,22 +155,46 @@ foreach my $msg_key ( keys %msg_hash ) {
             next;
         }
     }
-    if ( $msg_hash{$msg_key} eq '1' ) { push @no_pairs, $msg_key; }
+    if ( $msg_hash{$msg_key} == 1 ) { push @no_pairs, $msg_key; }
 }
 
+### Filter message IDs -- second pass
+if (@no_pairs) {
+    foreach my $nopair (@no_pairs) {
+        foreach my $fn (@files) {
+            if ( searchfile( $nopair, $fn ) ) {
+                push @with_pairs_arr, $nopair;
+            }
+        }
+    }
+}
+$with_pairs_hash{$_}++ foreach @with_pairs_arr;
+@with_pairs_arr = ();
+foreach my $msg_key ( keys %with_pairs_hash ) {
+    if ( $with_pairs_hash{$msg_key} == 2 ) {
+        push @with_pairs_arr, $msg_key;
+    }
+}
+%with_pairs_hash = map { $_ => 1 } @with_pairs_arr;
+@no_pairs = grep { not $with_pairs_hash{$_} } @no_pairs;
+
+### Merge filtered message IDs
+@msg_hash{ keys %with_pairs_hash } = values %with_pairs_hash;
+
+### Output
 if ( $opts{v} ) {
     printf "Threshold: %d\n", $threshold;
     printf "Maildir: %s\n",   $maildir;
     if (@skipped) {
-        printf "\nSkipped (less than threshold):\n";
-        printf "%s\n", $_ foreach (@skipped);
+        printf "\nSkipped mails:\n";
+        printf "%s\n", $_ foreach ( sort @skipped );
     }
     if (@no_pairs) {
-        printf "\nMessages above threshold:\n";
-        printf "%s\n", $_ foreach (@no_pairs);
+        printf "\nMessages above threshold (%d):\n", scalar @no_pairs;
+        printf "%s\n", $_ foreach ( sort @no_pairs );
     }
-    printf "\nAll messages:\n";
-    printf "%s\n", $_ foreach ( keys %msg_hash );
+    printf "\nAll messages (%d):\n", scalar keys %msg_hash;
+    printf "%s\n", $_ foreach ( sort keys %msg_hash );
     print "\n[OUTPUT] ";
 }
 
@@ -174,8 +203,7 @@ if (@no_pairs) {
     $servicemessage = sprintf "CRITICAL: %d %s above threshold.",
       scalar @no_pairs, $num_msgs;
     $servicestatus = 2;
-}
-else {
+} else {
     my $num_msgs = ( scalar keys %msg_hash > 1 ) ? 'Messages' : 'Message';
     $servicemessage = sprintf "OK: %s below threshold.", $num_msgs;
     $servicestatus = 0;
@@ -183,8 +211,7 @@ else {
 
 if ( $opts{o} ) {
     print $servicemessage . "\n";
-}
-else {
+} else {
     writecommand( $commandhost, $commandsvc, $servicestatus, $servicemessage );
     if ( $opts{v} ) { printf "Wrote to command file: %s\n", $servicemessage; }
 }
