@@ -15,12 +15,13 @@ our $VERSION = 1.2;
 my $opt_str = 'dhvot:H:S:';
 my %opts;
 
-my $maildir         = '/var/lib/nagios/Maildir/Mainframe/new';
-my $whitelist       = '/var/lib/nagios/whitelist.msgs';
+my $maildir   = '/path/to/mainframe/maildir';
+my $whitelist = '/path/to/mainframe/whitelist.msgs';
+
 my $patt_subject    = qr/Subject:\s+MESSAGE\ FILE\ NOTICE/x;
 my $patt_message_id = qr/\s+(\d{2}[A-Z]{1}\d{5}.+)/x;
 
-my $commandfile   = '/usr/local/nagios/var/rw/nagios.cmd';
+my $commandfile   = '/path/to/nagios.cmd';
 my $servicestatus = 0;
 my $servicemessage;
 
@@ -109,9 +110,9 @@ my $threshold = int $opts{t};
 $threshold *= 60;
 
 if ( $opts{d} ) {
-    $maildir     = 'var/lib/nagios/Maildir/Mainframe/new/';
-    $whitelist   = 'var/lib/nagios/whitelist.msgs';
-    $commandfile = 'usr/local/nagios/var/rw/nagios.cmd';
+    $maildir     = '/path/to/mainframe/debug/maildir/';
+    $whitelist   = '/path/to/mainframe/debug/whitelist.msgs';
+    $commandfile = '/path/to/mainframe/debug/nagios.cmd';
 }
 
 my $commandhost = $opts{H};
@@ -130,8 +131,10 @@ foreach my $fn (@files) {
     my $mtime = ( stat $fn )[9];
     my $stime = time;
     if ( ( $stime - $mtime ) < $threshold ) {
-        push @skipped, $fn;
-        next;
+        if ( !searchfile( '( ACK )', $fn ) ) {
+            push @skipped, $fn;
+            next;
+        }
     }
     open my $fh, '<', "$fn" or die "Cannot open $fn: $!\n";
     while (<$fh>) {
