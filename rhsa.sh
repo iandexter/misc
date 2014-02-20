@@ -82,7 +82,7 @@ saveCVEinfo() {
     collectCVEurls
     echo "Extracting CVE info..."
     for c in ${cve_urls} ; do
-        extractCVEinfo ${c} >> $(basename $0 .sh)-${rhsa_mails}
+        extractCVEinfo ${c} >> ${cve_txt}
     done
     echo '---'
     summarize
